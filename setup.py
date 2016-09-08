@@ -36,6 +36,11 @@ setup(
     license='Other/Proprietary License',
     install_requires=requirements,
     packages=find_packages(),
+    entry_points={
+        'distutils.commands': [
+            'cdist=cython_dist.cdist:CDistCommand',
+        ],
+    },
     classifiers=[
         'Development Status :: 1 - Planning',
         'Environment :: Console',
