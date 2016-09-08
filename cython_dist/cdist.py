@@ -2,53 +2,12 @@
 """
 
 from distutils import dir_util, log
-import fnmatch
 import os
 
 from Cython.Compiler.Main import compile_multiple, CompilationOptions
 from setuptools.command.sdist import sdist as SDistCommand
 
-
-def globstar_match(filename, pattern):
-    """Check if ``filename`` matches ``pattern``
-
-    From the glob (7) manpage:
-
-        Matching is defined by:
-
-        A '?' matches any single character.
-
-        A '*' matches any string, including the empty string.
-
-        An expression "[...]" where the first character after the leading '['
-        is not an '!' mathes a single character, namely any of the characters
-        enclosed by the brackets. The string enclosed by the brackets cannot
-        be empty; therefor ']' can be allowed between brackets.
-
-    globstar:
-        the pattern ** used in a pathname expansion context will
-        match all files and zero or more directories and subdirectories.
-        If the pattern is followed by a /, only directories and
-        subdirectories match.
-    """
-    if '**' in pattern:
-        pattern = pattern.replace('/**', '*').replace('**', '*')
-        return fnmatch.fnmatch(filename, pattern)
-    fparts = filename.split('/')
-    pparts = pattern.split('/')
-    while fparts:
-        fhead = fparts.pop(0)
-        try:
-            phead = pparts.pop(0)
-        except IndexError():
-            return True
-        if not phead:
-            return True
-        if not fnmatch.fnmatch(fhead, phead):
-            return False
-    if pparts:
-        return False
-    return True
+from cython_dist.egg_info import EggInfoCommand
 
 
 class CDistCommand(SDistCommand):
@@ -59,7 +18,7 @@ class CDistCommand(SDistCommand):
 
     user_options = [
         ('exclude-sources=', None,
-         'Do not convert these files into .c files. [default: __init__.py,setup.py]'),
+         'Do not convert these files into .c files. [default: setup.py,**/__init__.py]'),
         ('source-extensions=', None,
          'Convert files with these extensions into .c files [default: py,pyx]'),
         ('include-path=', None,
@@ -82,43 +41,44 @@ class CDistCommand(SDistCommand):
         self.ensure_string_list('source_extensions')
         self.ensure_string_list('include_path')
         if self.exclude_sources is None:
-            self.exclude_sources = ['**/__init__.py', '**/setup.py']
+            self.exclude_sources = ['setup.py', '**/__init__.py']
         if self.source_extensions is None:
             self.source_extensions = ['py', 'pyx']
-        self.python_sources = []
+        self.python_sources = {}
         self.compilation_options = CompilationOptions()
         self.compilation_options.cplus = False
         self.compilation_options.include_path = self.include_path or []
 
-    def get_file_list(self):
-        """Get the filelist and updates it with C filenames.
+    def run(self):
+        """Run the sdist command, but use our patched egg_info and dist_file signature
         """
-        SDistCommand.get_file_list(self)
-        old_filelist, self.filelist.files = self.filelist.files[:], []
-        for filename in old_filelist:
-            for pattern in self.exclude_sources:
-                if globstar_match(filename, pattern):
-                    self.filelist.append(filename)
-                    break
-            else:
-                root, ext = os.path.splitext(filename)
-                if ext[1:] in self.source_extensions:
-                    self.python_sources.append(filename)
-                    filename = root+'.c'
-                self.filelist.append(filename)
+        # cython_dist.egg_info.EggInfoCommand
+        ei_cmd = EggInfoCommand(self.distribution)
+        ei_cmd.finalize_options()
+        ei_cmd.run()
+        self.filelist = ei_cmd.filelist
+        self.filelist.append(os.path.join(ei_cmd.egg_info, 'SOURCES.txt'))
+        self.check_readme()
 
-        self.filelist.sort()
+        # Run sub commands
+        for cmd_name in self.get_sub_commands():
+            self.run_command(cmd_name)
 
-        # Now we can write the manifest
-        SDistCommand.write_manifest(self)
+        # Call check_metadata only if no 'check' command
+        # (distutils <= 2.6)
+        import distutils.command
 
-    def write_manifest(self):
-        """Do not write manifest file until the filelist is updated with C replacements
+        if 'check' not in distutils.command.__all__:
+            self.check_metadata()
 
-        Manifest writing will happen at the end of `get_file_list` instead
-        """
-        self_ = self
-        return
+        self.make_distribution()
+
+        dist_files = getattr(self.distribution, 'dist_files', [])
+        for file in self.archive_files:
+            # Use our signature
+            data = ('cdist', '', file)
+            if data not in dist_files:
+                dist_files.append(data)
 
     def make_release_tree(self, base_dir, files):
         """Create the directory tree that will become the dist archive.
@@ -133,11 +93,9 @@ class CDistCommand(SDistCommand):
         else:
             link = None
             log.info('copying files to {}...'.format(base_dir))
-        if self.dry_run:
-            compiled_files = [os.path.splitext(src)[0]+'.c' for src in self.python_sources]
-        else:
-            results = compile_multiple(self.python_sources, self.compilation_options)
-            compiled_files = [result.c_file for result in results.values()]
+        compiled_files = self.python_sources.values()
+        if not self.dry_run:
+            compile_multiple(self.python_sources.keys(), self.compilation_options)
         for c_file in compiled_files:
             dest = os.path.join(base_dir, c_file)
             self.move_file(c_file, dest)

@@ -14,14 +14,6 @@ import os
 from setuptools import setup, find_packages
 
 
-with open('requirements.txt') as req_file:
-    requirements = []
-    for line in req_file:
-        line = line.split('#', 1)[0].strip()
-        if line:
-            requirements.append(line)
-
-
 __version__ = '0.1.0'  # Overwritten below
 with open('cython_dist/version.py') as handle:
     exec(handle.read())  # pylint: disable=exec-used
@@ -34,7 +26,9 @@ setup(
     author='Alphadelta14',
     author_email='alpha@alphaservcomputing.solutions',
     license='Other/Proprietary License',
-    install_requires=requirements,
+    install_requires=[
+        'Cython'
+    ],
     packages=find_packages(),
     entry_points={
         'distutils.commands': [
